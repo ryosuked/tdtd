@@ -48,6 +48,7 @@ public final class WorkspaceStore: Identifiable {
 
     // MARK: 操作
     // Wiring: ここから下の各メソッドは、TodoCore の同じ名前の操作を apply に渡すだけ。決まりと処理は TodoCore にある。
+    // 例外は moveTaskToEnd だけで、移す先の末尾の位置を求めて moveTask を呼ぶ。
     // 文字列を受け取る操作は、決まりに合わなければ誤りを 1 か所に出し、false を返す。
     // @discardableResult は「戻り値を使わずに呼んでも警告を出さない」印
 
@@ -96,6 +97,11 @@ public final class WorkspaceStore: Identifiable {
         apply { $0.moveTask(taskID, to: categoryID, at: index, now: $1) }
     }
 
+    /// カテゴリの末尾へ移す（メニューの「カテゴリへ移す」・詳細のペインのカテゴリの選択）
+    public func moveTaskToEnd(_ taskID: UUID, of categoryID: UUID) {
+        moveTask(taskID, to: categoryID, at: workspace.category(categoryID)?.tasks.count ?? 0)
+    }
+
     public func deleteTask(_ taskID: UUID) {
         apply { $0.deleteTask(taskID, now: $1) }
     }
@@ -131,8 +137,9 @@ public final class WorkspaceStore: Identifiable {
     }
 
     /// 1 秒後に保存する。待つ間に次の変更が来たら、前の待ちを取り消して待ち直す（間引き）。
-    /// 保存するのは「その時点の最新の workspace」なので、取り消した分の変更も失われない
-    private func scheduleSave() {
+    /// 保存するのは「その時点の最新の workspace」なので、取り消した分の変更も失われない。
+    /// ワークスペースのファイルを書くのはここだけ（AppModel が足したときも、これを呼ぶ）。経路が 1 つなので、古い中身が後から書かれない
+    func scheduleSave() {
         saveTask?.cancel()
         // Task.sleep で 1 秒待つ。待つ間に cancel されると、isCancelled が true になって保存しない
         saveTask = Task { [weak self] in

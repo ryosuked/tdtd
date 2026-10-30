@@ -26,7 +26,7 @@ struct WorkspaceView: View {
                 ContentUnavailableView {
                     Label("カテゴリがありません", systemImage: "rectangle.split.3x1")
                 } actions: {
-                    Button("カテゴリを作る") { store.addCategory(name: "新しいカテゴリ") }
+                    Button("カテゴリを作る", action: addCategory)
                 }
             } else {
                 switch viewState.mode {
@@ -58,9 +58,7 @@ struct WorkspaceView: View {
                 Toggle("完了を隠す", systemImage: "checkmark.circle.badge.xmark", isOn: binding(\.hideCompleted))
             }
             ToolbarItem {
-                Button("カテゴリを追加", systemImage: "rectangle.badge.plus") {
-                    store.addCategory(name: "新しいカテゴリ")
-                }
+                Button("カテゴリを追加", systemImage: "rectangle.badge.plus", action: addCategory)
             }
             ToolbarItem {
                 Button("書き出す", systemImage: "square.and.arrow.up") {
@@ -72,13 +70,18 @@ struct WorkspaceView: View {
             }
         }
         .fileExporter(
-            isPresented: Binding(get: { exportDocument != nil }, set: { if !$0 { exportDocument = nil } }),
+            isPresented: $exportDocument.isPresent(),
             document: exportDocument,
             contentType: .json,
             defaultFilename: store.workspace.name
         ) { result in
             if case .failure(let error) = result { model.errorMessage = error.localizedDescription }
         }
+    }
+
+    /// 仮の名前で末尾に足す。名前は見出しのメニューから変える
+    private func addCategory() {
+        store.addCategory(name: "新しいカテゴリ")
     }
 
     /// Wiring: 表示の状態（AppModel が持つ）の 1 項目を、ツールバーの部品に結びつける口を作る。

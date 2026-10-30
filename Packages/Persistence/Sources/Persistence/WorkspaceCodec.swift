@@ -1,7 +1,7 @@
 // WorkspaceCodec.swift — ワークスペースのファイルの読み書きと検証（Persistence）
 //
-// 読む: Data → FileHeaderDTO で版を見る → 版ごとの DTO → Validator で検証しつつドメインの型へ
-// 書く: ドメインの型 → DTO → JSON。書いた結果を読み直して元と一致するのを確かめてから返す
+// 読む: Data → FileHeaderDTO で版を見る → 版ごとの DTO →（版 1 なら migrateV1 で版 2 の形へ）→ Validator で検証しつつドメインの型へ
+// 書く: ドメインの型 → DTO（WorkspaceFile.swift）→ JSON。書いた結果を読み直して元と一致するのを確かめてから返す
 //
 // レビューの観点:
 // - 検証の V1〜V6（data_model_spec §5）が、どこで確かめられているか
@@ -9,9 +9,9 @@
 //     V2 format・schemaVersion    … decode の先頭
 //     V3 必須の項目・型           … decodeDTO（Codable の keyNotFound・typeMismatch）
 //     V4 UUID・日時・日付・色名   … Validator の id・date・localDate・category
-//     V5 文字列の決まり           … Validator.text（TodoCore の TextRule.accept）
+//     V5 文字列の決まり           … Validator.text（TodoCore の TextRule.accept）。版 1 のタイトルだけは migrateV1
 //     V6 ID の重複                … Validator.id（seenIDs）
-// - 版 1 からの移し方（taskV1）が data_model_spec §10.1 と合っているか
+// - 版 1 からの移し方（migrateV1）が data_model_spec §10.1 と合っているか
 // - 日時のミリ秒を自前で読み書きしている理由（ISODate のコメント）
 
 import Foundation
@@ -57,21 +57,15 @@ public enum WorkspaceCodec {
         guard header.format == WorkspaceFormat.format else {
             throw WorkspaceFileError(kind: .wrongFormat, path: "format")
         }
-        var validator = Validator()
+        // 古い版は、先に今の版（2）の DTO に移す。検証は版によらず 1 通り
+        let dto: WorkspaceDTO<TodoItemDTO>
         switch header.schemaVersion {
-        case 2:
-            let dto = try decodeDTO(WorkspaceFileDTO<TodoItemDTO>.self, from: data)
-            return try validator.workspace(dto.workspace, path: "workspace") { v, t, path throws(WorkspaceFileError) in
-                try v.task(t, path: path)
-            }
-        case 1:
-            let dto = try decodeDTO(WorkspaceFileDTO<TodoItemV1DTO>.self, from: data)
-            return try validator.workspace(dto.workspace, path: "workspace") { v, t, path throws(WorkspaceFileError) in
-                try v.taskV1(t, path: path)
-            }
-        default:
-            throw WorkspaceFileError(kind: .unsupportedVersion(header.schemaVersion), path: "schemaVersion")
+        case 2: dto = try decodeDTO(WorkspaceFileDTO<TodoItemDTO>.self, from: data).workspace
+        case 1: dto = try migrateV1(decodeDTO(WorkspaceFileDTO<TodoItemV1DTO>.self, from: data).workspace)
+        default: throw WorkspaceFileError(kind: .unsupportedVersion(header.schemaVersion), path: "schemaVersion")
         }
+        var validator = Validator()
+        return try validator.workspace(dto, path: "workspace")
     }
 
     /// 書き出す。書いた結果を読み直して、元と一致することを確かめてから返す
@@ -89,7 +83,7 @@ public enum WorkspaceCodec {
         return data
     }
 
-    static func encodeUnchecked(_ workspace: Workspace) throws -> Data {
+    private static func encodeUnchecked(_ workspace: Workspace) throws -> Data {
         let dto = WorkspaceFileDTO(
             format: WorkspaceFormat.format,
             schemaVersion: WorkspaceFormat.schemaVersion,
@@ -133,41 +127,68 @@ public enum WorkspaceCodec {
     }
 }
 
+// MARK: - 版 1 → 版 2（data_model_spec §10.1）
+
+extension WorkspaceCodec {
+    /// 版 1 のタスク（title・note）を、版 2 の形（content）に移す。ほかの階層はそのまま写す。
+    ///
+    /// 文字列の確かめはここでもする。空のタイトルは、メモとつなぐと空でなくなり、移した後では見つけられないため。
+    /// 誤りの場所は版 1 のファイルにあるキー（title・note）で返す。ほかの検証は、移した後に Validator が行う
+    fileprivate static func migrateV1(
+        _ ws: WorkspaceDTO<TodoItemV1DTO>
+    ) throws(WorkspaceFileError) -> WorkspaceDTO<TodoItemDTO> {
+        var categories: [CategoryDTO<TodoItemDTO>] = []
+        for (ci, c) in ws.categories.enumerated() {
+            var tasks: [TodoItemDTO] = []
+            for (ti, t) in c.tasks.enumerated() {
+                let path = "workspace.categories[\(ci)].tasks[\(ti)]"
+                let title = try Validator.text(t.title, .legacyTaskTitle, path: path + ".title")
+                let content = try Validator.text(
+                    t.note.isEmpty ? title : title + "\n" + t.note, .taskContent, path: path + ".note"
+                )
+                tasks.append(TodoItemDTO(
+                    id: t.id, content: content, due: t.due, completedAt: t.completedAt, createdAt: t.createdAt
+                ))
+            }
+            categories.append(CategoryDTO(id: c.id, name: c.name, color: c.color, tasks: tasks, createdAt: c.createdAt))
+        }
+        return WorkspaceDTO(
+            id: ws.id, name: ws.name, categories: categories, createdAt: ws.createdAt, updatedAt: ws.updatedAt
+        )
+    }
+}
+
 // MARK: - DTO → ドメイン（検証）
 
-/// DTO を検証しながらドメインの型へ変える。最初に見つけた誤りで止める（場所は path で渡していく）
+/// DTO を検証しながらドメインの型へ変える。最初に見つけた誤りで止める（場所は path で渡していく）。
+/// 上から順に確かめるので、誤りが 2 つあるファイルでは、ファイルの中で先に出てくる方を返す
 private struct Validator {
     /// V6（ID の重複）のため、読んだ ID をすべて覚えておく。ワークスペース・カテゴリ・タスクを通して重複を許さない
     var seenIDs: Set<UUID> = []
 
-    /// タスクの DTO を TodoItem へ変える関数。版 1 と版 2 で差し替える（task か taskV1）
-    typealias TaskConverter<Item> = (inout Validator, Item, String) throws(WorkspaceFileError) -> TodoItem
-
-    mutating func workspace<Item>(
-        _ dto: WorkspaceDTO<Item>, path: String, task: TaskConverter<Item>
-    ) throws(WorkspaceFileError) -> Workspace {
-        Workspace(
-            id: try id(dto.id, path: path + ".id"),
-            name: try text(dto.name, .workspaceName, path: path + ".name"),
-            categories: try dto.categories.enumerated().map { (i, c) throws(WorkspaceFileError) in
-                try category(c, path: "\(path).categories[\(i)]", task: task)
-            },
+    mutating func workspace(_ dto: WorkspaceDTO<TodoItemDTO>, path: String) throws(WorkspaceFileError) -> Workspace {
+        let id = try id(dto.id, path: path + ".id")
+        let name = try Self.text(dto.name, .workspaceName, path: path + ".name")
+        var categories: [TodoCategory] = []
+        for (i, c) in dto.categories.enumerated() {
+            categories.append(try category(c, path: "\(path).categories[\(i)]"))
+        }
+        return Workspace(
+            id: id, name: name, categories: categories,
             createdAt: try date(dto.createdAt, path: path + ".createdAt"),
             updatedAt: try date(dto.updatedAt, path: path + ".updatedAt")
         )
     }
 
-    mutating func category<Item>(
-        _ dto: CategoryDTO<Item>, path: String, task: TaskConverter<Item>
-    ) throws(WorkspaceFileError) -> TodoCategory {
+    mutating func category(_ dto: CategoryDTO<TodoItemDTO>, path: String) throws(WorkspaceFileError) -> TodoCategory {
         let id = try id(dto.id, path: path + ".id")
-        let name = try text(dto.name, .categoryName, path: path + ".name")
+        let name = try Self.text(dto.name, .categoryName, path: path + ".name")
         guard let color = CategoryColor(rawValue: dto.color) else {
             throw WorkspaceFileError(kind: .invalidValue, path: path + ".color")
         }
         var tasks: [TodoItem] = []
         for (i, t) in dto.tasks.enumerated() {
-            tasks.append(try task(&self, t, "\(path).tasks[\(i)]"))
+            tasks.append(try task(t, path: "\(path).tasks[\(i)]"))
         }
         return TodoCategory(
             id: id, name: name, color: color, tasks: tasks,
@@ -178,26 +199,9 @@ private struct Validator {
     mutating func task(_ dto: TodoItemDTO, path: String) throws(WorkspaceFileError) -> TodoItem {
         TodoItem(
             id: try id(dto.id, path: path + ".id"),
-            content: try text(dto.content, .taskContent, path: path + ".content"),
+            content: try Self.text(dto.content, .taskContent, path: path + ".content"),
             due: try localDate(dto.due, path: path + ".due"),
-            completedAt: try dto.completedAt.map { s throws(WorkspaceFileError) in
-                try date(s, path: path + ".completedAt")
-            },
-            createdAt: try date(dto.createdAt, path: path + ".createdAt")
-        )
-    }
-
-    /// 版 1 のタスクを移す（data_model_spec §10.1）
-    mutating func taskV1(_ dto: TodoItemV1DTO, path: String) throws(WorkspaceFileError) -> TodoItem {
-        let title = try text(dto.title, .legacyTaskTitle, path: path + ".title")
-        let content = dto.note.isEmpty ? title : title + "\n" + dto.note
-        return TodoItem(
-            id: try id(dto.id, path: path + ".id"),
-            content: try text(content, .taskContent, path: path + ".note"),
-            due: try localDate(dto.due, path: path + ".due"),
-            completedAt: try dto.completedAt.map { s throws(WorkspaceFileError) in
-                try date(s, path: path + ".completedAt")
-            },
+            completedAt: try dateIfPresent(dto.completedAt, path: path + ".completedAt"),
             createdAt: try date(dto.createdAt, path: path + ".createdAt")
         )
     }
@@ -219,6 +223,13 @@ private struct Validator {
         return d
     }
 
+    /// 任意の項目の日時。キーが無い・null なら nil
+    func dateIfPresent(_ s: String?, path: String) throws(WorkspaceFileError) -> Date? {
+        guard let s else { return nil }
+        return try date(s, path: path)
+    }
+
+    /// 任意の項目の日付。キーが無い・null なら nil
     func localDate(_ s: String?, path: String) throws(WorkspaceFileError) -> LocalDate? {
         guard let s else { return nil }
         guard let d = LocalDate(string: s) else {
@@ -228,46 +239,13 @@ private struct Validator {
     }
 
     /// 文字列の決まりは TodoCore の TextRule に一本化している。
-    /// 正規化（data_model_spec §3.3）してから確かめ、正規化した形で持つ
-    func text(_ s: String, _ rule: TextRule, path: String) throws(WorkspaceFileError) -> String {
+    /// 正規化（data_model_spec §3.3）してから確かめ、正規化した形で持つ。版 1 の移行（migrateV1）からも使う
+    static func text(_ s: String, _ rule: TextRule, path: String) throws(WorkspaceFileError) -> String {
         do {
             return try rule.accept(s)
         } catch {
             throw WorkspaceFileError(kind: .invalidText(error), path: path)
         }
-    }
-}
-
-// MARK: - ドメイン → DTO
-// Wiring: 以下 3 つは、TodoCore の型を DTO に詰め替えるだけ（日時と UUID を文字列にする）。
-// 書くのは常に版 2 の形なので、型引数は TodoItemDTO に決めている
-
-extension WorkspaceDTO<TodoItemDTO> {
-    init(_ w: Workspace) {
-        self.init(
-            id: w.id.uuidString, name: w.name,
-            categories: w.categories.map(CategoryDTO.init),
-            createdAt: ISODate.format(w.createdAt), updatedAt: ISODate.format(w.updatedAt)
-        )
-    }
-}
-
-extension CategoryDTO<TodoItemDTO> {
-    init(_ c: TodoCategory) {
-        self.init(
-            id: c.id.uuidString, name: c.name, color: c.color.rawValue,
-            tasks: c.tasks.map(TodoItemDTO.init), createdAt: ISODate.format(c.createdAt)
-        )
-    }
-}
-
-extension TodoItemDTO {
-    init(_ t: TodoItem) {
-        self.init(
-            id: t.id.uuidString, content: t.content,
-            due: t.due?.string, completedAt: t.completedAt.map(ISODate.format),
-            createdAt: ISODate.format(t.createdAt)
-        )
     }
 }
 

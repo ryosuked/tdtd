@@ -48,7 +48,15 @@
 
 ## 4. テスト
 
-- **Swift は swift-testing**。TodoCore のカバレッジは 80% 以上
+- **Swift は swift-testing**。TodoCore・Persistence は、ソースの**各ファイル**の行カバレッジを 90% 以上にする（細部のテストで測る。`test.sh detail` は下回ると失敗する）
+- **テストは 2 種類に分け、フォルダ（テストのターゲット）も分ける**。`scripts/test.sh scenario|detail|all` で選んで流す
+
+| 種類 | 置き場所 | 見るもの | 見ないもの |
+|---|---|---|---|
+| シナリオ | `Packages/Features/Tests/Scenario/` | 道具としての一連の流れ（作る → 編集 → 保存 → 起動し直す → 書き出し・読み込み など）。AppModel・WorkspaceStore を画面と同じ呼び方で動かす | 細かい値・表記・誤りの場所や文言 |
+| 細部 | `Packages/<パッケージ>/Tests/Detail/` | 値・表記・検証の場所と理由・正規化の表など。カバレッジはこちらで満たす（`test.sh detail` が % を出す） | 部品をまたぐ流れ |
+
+- 流れを足したら（新しい機能の操作など）シナリオに 1 本足す。決まりや表記を足したら細部に足す
 - **`fixtures/` が保存形式の契約**: 正しいファイル（読んで書くと JSON の値として一致する）と、誤りのファイル（検証の V1〜V6 をそれぞれ 1 つずつ破ったもの）を置く。仕様を変えるときは「仕様書 → fixtures → 実装」の順で直す
 - **バグを直すときは、再現するテストを先に足す**
 - **テストは外に通信しない**（アプリ自体も通信しない）。時計と ID の生成は偽物に替え、結果を決まった値にする
@@ -88,12 +96,13 @@
 │   ├── Persistence/       # JSON の読み書き・検証・ファイルの置き場所・表示の状態（AppState）
 │   └── Features/          # Store（AppModel・WorkspaceStore）と画面。DesignSystem は必要になったら分ける
 └── scripts/
-    ├── test-all.sh        # 全パッケージのテスト＋macOS 向けのアプリのビルド
+    ├── test.sh            # テストを種類ごとに選んで流す（scenario・detail・all）
+    ├── test-all.sh        # 全部のテスト＋macOS 向けのアプリのビルド
     └── build-release.sh   # ほかの Mac へ持っていく用の Release ビルドと zip
 ```
 
 - **依存の向き**（逆流禁止）: App → Features → Persistence → TodoCore。TodoCore は何にも依存しない
-- **状態**: `AppModel`（`@Observable`・`@MainActor`）がワークスペースの一覧・表示の状態・誤りの表示を持つ。`WorkspaceStore`（開いているワークスペースごとに 1 つ）が値型の `Workspace` を持ち、更新は TodoCore の操作を呼ぶだけ。保存は 1 秒待ってから `WorkspaceRepository`（actor）で書く
+- **状態**: `AppModel`（`@Observable`・`@MainActor`）がワークスペースの一覧・表示の状態・誤りの表示を持つ。`WorkspaceStore`（開いているワークスペースごとに 1 つ）が値型の `Workspace` を持ち、更新は TodoCore の操作を呼ぶだけ。保存は 1 秒待ってから `WorkspaceRepository`（actor）で書く。ワークスペースのファイルを書くのは `WorkspaceStore` の保存だけ（AppModel は書かない。古い中身で上書きしないため）。AppModel が後ろで動かす入出力（削除・表示の状態）は 1 本の列に並べ、`flushAll` で待てる
 - **プラットフォーム**: 画面は Mac と iPad を対象に設計する。ビルドと確認は今は Mac だけ。基準の端末は未決（OPEN_ITEMS #1）。iPhone は後で足すので、レイアウトには手を付けない
 
 ### 6.2 守る決まり（詳しくは [data_model_spec.md](docs/data_model_spec.md)）
@@ -121,8 +130,11 @@
 ### 6.4 コマンド
 
 ```bash
-cd Packages/TodoCore && swift test        # パッケージ単位（Persistence も同じ）
-./scripts/test-all.sh                     # 全パッケージのテスト＋macOS 向けのアプリのビルド
+./scripts/test.sh scenario                # シナリオだけ（一連の流れ。数秒）
+./scripts/test.sh detail                  # 細部だけ（値・表記まで。カバレッジも出す）
+./scripts/test.sh                         # 両方
+./scripts/test-all.sh                     # 両方＋macOS 向けのアプリのビルド
+cd Packages/TodoCore && swift test        # パッケージ単位（Persistence も同じ。Features はシナリオ）
 open .build/DerivedData/Build/Products/Debug/Todo.app   # test-all.sh のビルドを起動する
 ./scripts/build-release.sh                # ほかの Mac 用: .build/release/Todo.zip を作る
 ```

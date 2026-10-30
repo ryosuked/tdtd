@@ -43,6 +43,8 @@ public final class AppModel {
     @ObservationIgnored private let repository: WorkspaceRepository
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let newID: () -> UUID
+    /// 後ろで動かしているファイルの入出力の、最後の 1 つ（inBackground）。次の入出力と flushAll がこれを待つ
+    @ObservationIgnored private var lastBackground: Task<Void, Never>?
 
     // 現在時刻と ID の作り方を外から渡せるようにしている（テストで決まった値に替えるため）。
     // 省略すると本物（Date.init・UUID.init）になる。@escaping は「受け取った関数を後で使うために保持する」の印
@@ -81,8 +83,9 @@ public final class AppModel {
             stores = result.workspaces.map(makeStore)
             // 並びの記録に無いファイル（インポート直後に落ちたなど）があれば、記録を今の並びに合わせる
             if appState.workspaceOrder != stores.map(\.id) { syncOrder() }
-            selectedID = appState.lastOpenedWorkspaceId.flatMap { id in stores.first { $0.id == id }?.id }
-                ?? stores.first?.id
+            // 最後に開いていたものを選ぶ。消えていたら先頭
+            let last = appState.lastOpenedWorkspaceId
+            selectedID = stores.contains { $0.id == last } ? last : stores.first?.id
             if !result.damagedFiles.isEmpty {
                 errorMessage = "読めないファイルがあったので退避しました: \(result.damagedFiles.joined(separator: ", "))"
             }
@@ -105,10 +108,7 @@ public final class AppModel {
         appState.workspaces[id.uuidString] = nil
         if selectedID == id { selectedID = stores.first?.id }
         syncOrder()
-        // Task { } は「後ろで非同期に動かす」。画面の操作は待たずに次へ進み、ファイルの削除は後で終わる
-        Task {
-            do { try await repository.delete(id) } catch { report("削除できませんでした。", error) }
-        }
+        inBackground("削除できませんでした。") { try await $0.delete(id) }
     }
 
     public func moveWorkspaces(fromOffsets source: IndexSet, toOffset destination: Int) {
@@ -172,8 +172,11 @@ public final class AppModel {
 
     // MARK: 保存
 
+    /// 待っている保存をすべて書き切る（背面に回る・終了するとき。テストでも使う）。
+    /// ワークスペースごとの 1 秒の待ちと、後ろで動かしている入出力（追加・削除・表示の状態）の両方を待つ
     public func flushAll() async {
         for store in stores { await store.flush() }
+        await lastBackground?.value
     }
 
     private func insert(_ ws: Workspace) {
@@ -181,9 +184,8 @@ public final class AppModel {
         stores.append(store)
         syncOrder()
         selectedID = ws.id
-        Task {
-            do { try await repository.save(ws) } catch { report("保存できませんでした。", error) }
-        }
+        // ファイルは Store の保存で書く（書く経路を 1 つにして、古い中身で上書きしないため）
+        store.scheduleSave()
     }
 
     /// Wiring: WorkspaceStore に、同じ置き場所・時計・ID の作り方と、誤りの知らせ先（errorMessage）を渡して作る。
@@ -203,53 +205,24 @@ public final class AppModel {
     /// 表示の状態を書く。変更のたびに別の Task で書くので、続けて変えると順が入れ替わりうる（OPEN_ITEMS に記録）
     private func saveAppState() {
         let state = appState
-        Task {
-            do { try await repository.saveAppState(state) } catch { report("表示の状態を保存できませんでした。", error) }
+        inBackground("表示の状態を保存できませんでした。") { try await $0.saveAppState(state) }
+    }
+
+    /// ファイルの入出力を後ろで動かす。画面の操作は待たずに次へ進み、失敗したら errorMessage に出す。
+    /// 1 本の列に並べる（前のものが終わってから始める）ので、書く順が入れ替わらない。flushAll で終わりを待てる。
+    /// `Task { }` は「後ろで非同期に動かす」。`@Sendable` は「別の流れに渡してよい関数」の印
+    private func inBackground(
+        _ failure: String, _ work: @escaping @Sendable (WorkspaceRepository) async throws -> Void
+    ) {
+        let repository = repository
+        let previous = lastBackground
+        lastBackground = Task {
+            await previous?.value
+            do { try await work(repository) } catch { report(failure, error) }
         }
     }
 
     private func report(_ message: String, _ error: any Error) {
         errorMessage = message + error.localizedDescription
-    }
-}
-
-// 以下 3 つは、誤りの種類を、利用者に見せる日本語の文言に変える対応表
-
-extension WorkspaceFileError {
-    /// 利用者に見せる文言
-    var message: String {
-        let reason = switch kind {
-        case .notJSON: "JSON として読めません。"
-        case .wrongFormat: "このアプリのワークスペースのファイルではありません。"
-        case .unsupportedVersion(let v): "新しい版（\(v)）のファイルです。アプリを更新してください。"
-        case .missingOrWrongType: "必要な項目が無いか、型が違います。"
-        case .invalidValue: "値の書式が正しくありません。"
-        case .invalidText(let v): v.message
-        case .duplicateID: "ID が重複しています。"
-        case .tooLarge: "ファイルが大きすぎます（上限 \(WorkspaceFormat.maxImportBytes / 1024 / 1024) MB）。"
-        }
-        return path.isEmpty ? reason : "\(reason)（場所: \(path)）"
-    }
-}
-
-extension TextRule.Violation {
-    var message: String {
-        switch self {
-        case .empty: "空にはできません。"
-        case .tooLong(let max): "\(max.formatted()) 文字までです。"
-        case .containsNewline: "改行は入れられません。"
-        }
-    }
-}
-
-extension EditError {
-    /// 利用者に見せる文言
-    var message: String {
-        let target = switch rule {
-        case .workspaceName: "ワークスペースの名前"
-        case .categoryName: "カテゴリの名前"
-        case .taskContent, .legacyTaskTitle: "タスクの中身"
-        }
-        return "\(target)は\(violation.message)"
     }
 }

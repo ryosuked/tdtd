@@ -67,8 +67,7 @@ extension Workspace {
     public mutating func moveCategory(_ categoryID: UUID, to index: Int, now: Date) {
         update(now: now) { ws in
             guard let from = ws.categories.firstIndex(where: { $0.id == categoryID }) else { return }
-            let category = ws.categories.remove(at: from)
-            ws.categories.insert(category, at: min(max(index, 0), ws.categories.count))
+            ws.categories.insert(ws.categories.remove(at: from), clampedAt: index)
         }
     }
 
@@ -124,9 +123,7 @@ extension Workspace {
                   let (ci, ti) = ws.taskPosition(taskID)
             else { return }
             let task = ws.categories[ci].tasks.remove(at: ti)
-            ws.withCategory(categoryID) {
-                $0.tasks.insert(task, at: min(max(index, 0), $0.tasks.count))
-            }
+            ws.withCategory(categoryID) { $0.tasks.insert(task, clampedAt: index) }
         }
     }
 
@@ -169,20 +166,9 @@ extension Workspace {
     }
 }
 
-extension Date {
-    /// 1970 年からのミリ秒（整数）。保存の書式はこの値で書く
-    public var millisecondsSince1970: Int64 {
-        Int64((timeIntervalSince1970 * 1000).rounded())
-    }
-
-    /// ミリ秒（整数）から Date を作る
-    public init(millisecondsSince1970 ms: Int64) {
-        self.init(timeIntervalSince1970: Double(ms) / 1000)
-    }
-
-    /// ミリ秒に丸める。保存の書式（ミリ秒まで）と往復させても値が変わらないようにするため。
-    /// 切り捨てにしないのは、浮動小数点の誤差で 1 ms 下がることがあり、何度かけても同じ値になる保証が無いため
-    public var roundedToMilliseconds: Date {
-        Date(millisecondsSince1970: millisecondsSince1970)
+extension Array {
+    /// 範囲外の位置は端に丸めて入れる（負の数は先頭、多すぎる数は末尾）。並べ替えの操作で使う
+    fileprivate mutating func insert(_ element: Element, clampedAt index: Int) {
+        insert(element, at: Swift.min(Swift.max(index, 0), count))
     }
 }

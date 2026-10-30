@@ -40,7 +40,7 @@ struct WorkspaceSidebar: View {
         }
         .confirmationDialog(
             "「\(deleting?.workspace.name ?? "")」を削除しますか",
-            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            isPresented: $deleting.isPresent(),
             titleVisibility: .visible
         ) {
             Button("削除", role: .destructive) {

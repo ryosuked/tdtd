@@ -4,7 +4,6 @@
 //
 // レビューの観点:
 // - 編集中の文字列（draft）と保存しているデータ（task.content）を分けている理由（TaskDetail のコメント）
-// - Date ⇔ LocalDate の変換（ファイル末尾の extension）
 
 import SwiftUI
 import TodoCore
@@ -48,62 +47,77 @@ private struct TaskDetail: View {
         _draft = State(initialValue: task.content)
     }
 
+    // 上から: 完了とカテゴリ → 中身の編集 → 文字数と誤り → 期限 → 日時と削除
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Toggle(isOn: Binding(get: { task.isCompleted }, set: { store.setCompleted(task.id, $0) })) {
-                    Text(task.isCompleted ? "完了" : "未完了")
-                }
-                Spacer()
-                Picker("カテゴリ", selection: Binding(
-                    get: { category.id },
-                    set: { id in
-                        let count = store.workspace.category(id)?.tasks.count ?? 0
-                        store.moveTask(task.id, to: id, at: count)
-                    }
-                )) {
-                    ForEach(store.workspace.categories) { Text($0.name).tag($0.id) }
-                }
-                .labelsHidden()
-                .fixedSize()
-            }
-
-            TextEditor(text: $draft)
-                .font(.body)
-                .scrollContentBackground(.hidden)
-                .padding(6)
-                .background(.background, in: .rect(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(problem == nil ? AnyShapeStyle(.separator) : AnyShapeStyle(.red)))
-                .frame(maxHeight: .infinity)
-                .onChange(of: draft) { _, value in commit(value) }
-
-            HStack {
-                if let problem {
-                    Text("中身は\(problem.message)").foregroundStyle(.red)
-                }
-                Spacer()
-                Text("\(PlainText.normalized(draft).count.formatted()) / \(TextRule.taskContent.maxLength.formatted()) 文字")
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .font(.caption)
-
+            statusRow
+            editor
+            counterRow
             DueEditor(due: Binding(get: { task.due }, set: { store.setDue(task.id, $0) }))
-
-            HStack {
-                Text("作成: \(task.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                if let completedAt = task.completedAt {
-                    Text("完了: \(completedAt.formatted(date: .abbreviated, time: .shortened))")
-                }
-                Spacer()
-                Button("削除", systemImage: "trash", role: .destructive) { store.deleteTask(task.id) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            footerRow
         }
         .padding()
+    }
+
+    // 以下は body を段ごとに分けたもの。`some View` は「何かの画面の部品を返す」の意味
+
+    private var statusRow: some View {
+        HStack {
+            Toggle(isOn: Binding(get: { task.isCompleted }, set: { store.setCompleted(task.id, $0) })) {
+                Text(task.isCompleted ? "完了" : "未完了")
+            }
+            Spacer()
+            Picker("カテゴリ", selection: Binding(
+                get: { category.id }, set: { store.moveTaskToEnd(task.id, of: $0) }
+            )) {
+                ForEach(store.workspace.categories) { Text($0.name).tag($0.id) }
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+    }
+
+    /// 決まりに合わない間は枠を赤くする
+    private var editor: some View {
+        TextEditor(text: $draft)
+            .font(.body)
+            .scrollContentBackground(.hidden)
+            .padding(6)
+            .background(.background, in: .rect(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(problem == nil ? AnyShapeStyle(.separator) : AnyShapeStyle(.red))
+            )
+            .frame(maxHeight: .infinity)
+            .onChange(of: draft) { _, value in commit(value) }
+    }
+
+    private var counterRow: some View {
+        HStack {
+            if let problem {
+                Text("中身は\(problem.message)").foregroundStyle(.red)
+            }
+            Spacer()
+            Text("\(PlainText.normalized(draft).count.formatted()) / \(TextRule.taskContent.maxLength.formatted()) 文字")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .font(.caption)
+    }
+
+    private var footerRow: some View {
+        HStack {
+            Text("作成: \(task.createdAt.formatted(date: .abbreviated, time: .shortened))")
+            if let completedAt = task.completedAt {
+                Text("完了: \(completedAt.formatted(date: .abbreviated, time: .shortened))")
+            }
+            Spacer()
+            Button("削除", systemImage: "trash", role: .destructive) { store.deleteTask(task.id) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     /// 貼り付けで混ざる文字は Store に渡すときにそろう（data_model_spec §3.3）。
@@ -127,11 +141,11 @@ private struct DueEditor: View {
         HStack {
             Toggle("期限", isOn: Binding(
                 get: { due != nil },
-                set: { due = $0 ? (due ?? LocalDate(Date())) : nil }
+                set: { due = $0 ? (due ?? LocalDate(Date(), in: .current)) : nil }
             ))
             if let current = due {
                 DatePicker(
-                    "期限", selection: Binding(get: { current.date }, set: { due = LocalDate($0) }),
+                    "期限", selection: Binding(get: { current.date(in: .current) }, set: { due = LocalDate($0, in: .current) }),
                     displayedComponents: .date
                 )
                 .labelsHidden()
@@ -139,20 +153,4 @@ private struct DueEditor: View {
             Spacer()
         }
     }
-}
-
-// 画面の日付の部品（DatePicker）は Date（時刻つき）を使うので、LocalDate（日付だけ）と変換する
-extension LocalDate {
-    /// 利用者の暦（ローカルのタイムゾーン）で、その日付を表す
-    init?(_ date: Date, calendar: Calendar = .current) {
-        let c = calendar.dateComponents([.year, .month, .day], from: date)
-        guard let y = c.year, let m = c.month, let d = c.day else { return nil }
-        self.init(year: y, month: m, day: d)
-    }
-
-    func date(calendar: Calendar = .current) -> Date {
-        calendar.date(from: DateComponents(year: year, month: month, day: day)) ?? Date()
-    }
-
-    var date: Date { date() }
 }

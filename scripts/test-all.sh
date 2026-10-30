@@ -1,15 +1,9 @@
 #!/bin/sh
-# 全パッケージのテストと、macOS 向けのアプリのビルドを流す
+# 全部のテスト（細部とシナリオ。scripts/test.sh all）と、macOS 向けのアプリのビルドを流す
 set -eu
 cd "$(dirname "$0")/.."
 
-for pkg in TodoCore Persistence; do
-    echo "== swift test: $pkg"
-    (cd "Packages/$pkg" && swift test)
-done
-
-echo "== swift build: Features"
-(cd Packages/Features && swift build)
+./scripts/test.sh all
 
 echo "== xcodebuild: Todo (macOS)"
 xcodebuild -project Todo.xcodeproj -scheme Todo -configuration Debug \

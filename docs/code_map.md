@@ -41,7 +41,7 @@ Packages/TodoCore      純粋なロジック（Foundation だけに依存）
 
 ## 2. ファイルの一覧
 
-ソースは 21 ファイル（App 1・TodoCore 7・Persistence 4・Features 9）。数は `.swift` の数で、各パッケージの `Package.swift`（設定だけ）は含まない。
+ソースは 23 ファイル（App 1・TodoCore 7・Persistence 4・Features 11）。数は `.swift` の数で、各パッケージの `Package.swift`（設定だけ）は含まない。
 
 ### App（入口）— 1 ファイル
 
@@ -53,12 +53,12 @@ Packages/TodoCore      純粋なロジック（Foundation だけに依存）
 
 | ファイル | 中身 | 主な型・関数 | 関係する仕様 |
 |---|---|---|---|
-| `Model.swift` | データの型 | `Workspace`・`TodoCategory`・`TodoItem`・`CategoryColor` | spec §3 |
-| `Operations.swift` | データを変える操作。すべて `update(now:_:)` を通る | `addTask`・`setContent`・`moveTask`・`deleteCategory` など、`Date.roundedToMilliseconds` | spec §4 |
+| `Model.swift` | データの型と、日時をミリ秒にそろえる補助 | `Workspace`・`TodoCategory`・`TodoItem`・`CategoryColor`・`Date.roundedToMilliseconds` | spec §3 |
+| `Operations.swift` | データを変える操作。すべて `update(now:_:)` を通る | `addTask`・`setContent`・`moveTask`・`deleteCategory` など | spec §4 |
 | `TextRule.swift` | 文字列の決まり（長さ・改行・空白だけは不可） | `TextRule`・`TextRule.accept`・`EditError` | spec §3・§7 |
 | `PlainText.swift` | 貼り付けで混ざる文字の正規化 | `PlainText.normalized` | spec §3.3 |
-| `LocalDate.swift` | 日付だけの値（期限） | `LocalDate` | spec §3.2 |
-| `Views.swift` | 表示のための導出（保存しない） | `DisplayMode`・`listSections`・`TodoItem.preview` | requirements F4 |
+| `LocalDate.swift` | 日付だけの値（期限）。DatePicker の Date との変換（グレゴリオ暦に固定） | `LocalDate` | spec §3.2 |
+| `Display.swift` | 表示のための導出（保存しない） | `DisplayMode`・`listSections`・`TodoItem.preview` | requirements F4 |
 | `Copy.swift` | ID を振り直した複製（インポートの「複製として追加」） | `Workspace.withNewIDs` | spec §9 |
 
 ### Persistence（保存）— 4 ファイル
@@ -66,36 +66,42 @@ Packages/TodoCore      純粋なロジック（Foundation だけに依存）
 | ファイル | 中身 | 主な型・関数 | 関係する仕様 |
 |---|---|---|---|
 | `WorkspaceFile.swift` | JSON をそのまま受ける型（DTO）。版 1・版 2 | `WorkspaceFileDTO<Item>`・`TodoItemDTO`・`TodoItemV1DTO`・`WorkspaceFormat` | spec §2・§3 |
-| `WorkspaceCodec.swift` | 読み書きと検証、版 1 からの移行、日時の書式 | `WorkspaceCodec.decode`・`encode`、`Validator`、`ISODate`、`WorkspaceFileError` | spec §3.2・§5・§10 |
+| `WorkspaceCodec.swift` | 読み書きと検証、版 1 からの移行、日時の書式。読むときは「版を見る →（版 1 なら版 2 の DTO へ移す）→ 検証」の順 | `WorkspaceCodec.decode`・`encode`・`migrateV1`、`Validator`、`ISODate`、`WorkspaceFileError` | spec §3.2・§5・§10 |
 | `WorkspaceRepository.swift` | ファイルの置き場所と入出力（actor） | `loadAll`・`save`・`readImportFile`・`saveAppState` | spec §1・§8 |
 | `AppState.swift` | 表示の状態（端末ごと、エクスポートしない） | `AppState`・`WorkspaceViewState` | spec §6 |
 
-### Features（状態と画面）— 9 ファイル（Stores 2・Views 7）
+### Features（状態と画面）— 11 ファイル（Stores 2・Views 8・直下 1）
 
 | ファイル | 中身 | 主な型 | 関係する要件 |
 |---|---|---|---|
 | `Stores/AppModel.swift` | アプリ全体の状態。一覧・表示の状態・誤りの表示・インポート・エクスポート | `AppModel` | F1・F5 |
 | `Stores/WorkspaceStore.swift` | ワークスペース 1 つの操作の入口と、1 秒待ってからの保存 | `WorkspaceStore` | F2・F3・F6 |
+| `Messages.swift` | 利用者に見せる誤りの文言（誤りの種類 → 日本語の対応表） | `WorkspaceFileError.message`・`EditError.message` | F5-4 |
 | `Views/RootView.swift` | 画面の入口。読み込みの開始、インポートの確認、誤りのアラート | `RootView` | F5・F6 |
 | `Views/WorkspaceSidebar.swift` | 左の一覧 | `WorkspaceSidebar` | F1 |
 | `Views/WorkspaceView.swift` | 中央と右のペインの組み立て、ツールバー、書き出し | `WorkspaceView`・`JSONFileDocument` | F4・F5 |
 | `Views/ColumnsView.swift` | 短冊表示 | `ColumnsView`・`CategoryColumn` | F4-1・F4-6 |
 | `Views/ListModeView.swift` | 1 欄表示 | `ListModeView` | F4-2・F4-5 |
-| `Views/TaskInspector.swift` | 右の詳細のペイン。Date ⇔ LocalDate の変換もここ | `TaskInspector`・`TaskDetail`・`DueEditor` | F4-9 |
-| `Views/Components.swift` | 共通の部品 | `TaskRow`・`CategoryHeader`・`AddTaskField`・`renameAlert` | F3・F4-8 |
+| `Views/TaskInspector.swift` | 右の詳細のペイン | `TaskInspector`・`TaskDetail`・`DueEditor` | F4-9 |
+| `Views/Components.swift` | 両方の表示で使う部品 | `TaskRow`・`CategoryHeader`・`AddTaskField` | F3・F4-8 |
+| `Views/ViewHelpers.swift` | 部品から使う補助。名前の変更のアラート、アラートの出し入れ、色の対応表 | `renameAlert`・`Binding.isPresent`・`CategoryColor.swatch` | F1・F2 |
 
-### テストと契約 — テスト 2 ファイル、fixtures 23 ファイル（valid 6・invalid 17）、スクリプト 2 ファイル
+### テストと契約 — テスト 3 ファイル（細部 2・シナリオ 1）、fixtures 23 ファイル（valid 6・invalid 17）、スクリプト 3 ファイル
+
+テストは 2 種類で、フォルダを分けている（CLAUDE.md §4）。`scripts/test.sh scenario|detail|all` で選んで流す。
 
 | 場所 | 中身 |
 |---|---|
-| `Packages/TodoCore/Tests/TodoCoreTests/OperationsTests.swift` | 操作・updatedAt・誤りの操作・冒頭の切り出し・文字列の決まり・正規化・日付 |
-| `Packages/Persistence/Tests/PersistenceTests/WorkspaceCodecTests.swift` | fixtures を読む。往復の一致・版 1 からの移行・正規化・誤りのファイル・書く前の確かめ・退避 |
+| `Packages/Features/Tests/Scenario/ScenarioTests.swift` | **シナリオ**。AppModel から一連の流れ: 作って編集して起動し直す、誤りの入力、書き出しと読み込み（置き換え・複製）、版 1 のファイル、壊れたファイルの退避、削除、表示の状態 |
+| `Packages/TodoCore/Tests/Detail/OperationsTests.swift` | **細部**。操作・updatedAt・誤りの操作・冒頭の切り出し・文字列の決まり・正規化・日付 |
+| `Packages/Persistence/Tests/Detail/WorkspaceCodecTests.swift` | **細部**。fixtures を読む。往復の一致・版 1 からの移行・正規化・誤りのファイル・書く前の確かめ・退避 |
 | `fixtures/valid/` | 正しいファイル。`basic.json`（版 2）、`v1-*.json`（版 1）、`*-needs-normalize*.json`（正規化の前と後） |
 | `fixtures/invalid/` | 誤りのファイル。名前の先頭が検証の番号（`V1-`〜`V6-`）。1 つのファイルで 1 つの決まりだけを破る |
-| `scripts/test-all.sh` | 全部のテストと、macOS 向けのアプリのビルド |
+| `scripts/test.sh` | テストを種類ごとに選んで流す。`detail` はファイルごとの行カバレッジ（%）も出し、90% 未満があれば失敗にする |
+| `scripts/test-all.sh` | 全部のテスト（`test.sh all`）と、macOS 向けのアプリのビルド |
 | `scripts/build-release.sh` | ほかの Mac へ持っていく用の Release ビルドと zip（[dev_environment_setup.md](dev_environment_setup.md) §5） |
 
-Features にはまだテストが無い。
+Features の画面（Views）にはテストが無い。画面の見た目と操作は手で確かめる（OPEN_ITEMS）。
 
 ## 3. 処理の流れ
 
@@ -121,7 +127,7 @@ Features にはまだテストが無い。
 ### 3.3 インポート
 
 1. `WorkspaceSidebar` の「読み込む」→ `RootView` の `.fileImporter` → `AppModel.importFile(at:)`
-2. `WorkspaceRepository.readImportFile` が大きさ（20 MB まで）を見てから `WorkspaceCodec.decode`。版 1 はここで版 2 に移る
+2. `WorkspaceRepository.readImportFile` が大きさ（20 MB まで）を見てから `WorkspaceCodec.decode`。版 1 はここで版 2 に移る（`migrateV1`）
 3. 同じ ID が無ければそのまま足す。あれば `pendingImport` に置き、`RootView` の確認で選ぶ
    - 置き換える → `WorkspaceStore.replace(with:)`
    - 複製として追加 → `Workspace.withNewIDs` で ID を振り直して足す
@@ -219,6 +225,7 @@ Features にはまだテストが無い。
 | `@ObservationIgnored` | 変わっても描き直しに関係ない値の印 |
 | `@Bindable` | `@Observable` の値の項目を、入力欄や選択に結びつける印 |
 | `Binding(get:set:)` | その場で作る読み書きの口 |
+| `$x.isPresent()` | このアプリの補助（`ViewHelpers.swift`）。「値があるときだけ出す」アラートなどの出し入れに使う |
 | `.task`・`.onChange` | 画面が出たとき・値が変わったときに処理を始める |
 | `.id(値)` | 値が変わると部品を作り直す（`@State` も初期値に戻る） |
 

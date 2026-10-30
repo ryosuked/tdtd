@@ -14,6 +14,8 @@ let package = Package(
         .package(path: "../Persistence"),
     ],
     targets: [
-        .target(name: "Features", dependencies: ["TodoCore", "Persistence"])
+        .target(name: "Features", dependencies: ["TodoCore", "Persistence"]),
+        // シナリオのテスト（道具としての一連の流れを AppModel から通す）。scripts/test.sh scenario で流す
+        .testTarget(name: "ScenarioTests", dependencies: ["Features", "Persistence", "TodoCore"], path: "Tests/Scenario"),
     ]
 )

@@ -1,10 +1,11 @@
-// OperationsTests.swift — TodoCore のテスト
+// OperationsTests.swift — TodoCore の細部のテスト
 //
+// 値と表記まで見る。一連の流れは Features の Tests/Scenario で見る（CLAUDE.md §4）。
 // 時刻と ID は Fixed の決まった値を使う（テストの結果を毎回同じにするため）。
 // - OperationsTests: 操作ごとの結果と updatedAt の決まり（data_model_spec §4）、誤りの操作でデータが変わらないこと
 // - PreviewTests: 一覧に出す冒頭 3 行の切り出し
 // - TextRuleTests・PlainTextTests: 文字列の決まりと正規化（§3.3）
-// - LocalDateTests: 日付の文字列の読み書き
+// - LocalDateTests: 日付の文字列の読み書き、Date との変換
 
 import Foundation
 import Testing
@@ -121,9 +122,47 @@ private func workspace(tasks: [String]) throws -> Workspace {
         #expect(ws.task(Fixed.id(20)) == nil)
     }
 
+    @Test func setCategoryColorTouchesUpdatedAt() throws {
+        var ws = try workspace(tasks: [])
+        ws.setCategoryColor(Fixed.id(10), to: .blue, now: Fixed.time(5))
+        #expect(ws.categories[0].color == .blue)
+        #expect(ws.updatedAt == Fixed.time(5))
+    }
+
+    /// 範囲外の位置は端に丸める。無い ID では何も変えない
+    @Test func moveCategoryClampsIndexAndIgnoresUnknownID() throws {
+        var ws = try workspace(tasks: [])
+        try ws.addCategory(id: Fixed.id(11), name: "B", now: Fixed.time(1))
+        try ws.addCategory(id: Fixed.id(12), name: "C", now: Fixed.time(1))
+        ws.moveCategory(Fixed.id(12), to: -5, now: Fixed.time(2))
+        #expect(ws.categories.map(\.name) == ["C", "A", "B"])
+        ws.moveCategory(Fixed.id(12), to: 99, now: Fixed.time(3))
+        #expect(ws.categories.map(\.name) == ["A", "B", "C"])
+        let before = ws
+        ws.moveCategory(Fixed.id(99), to: 0, now: Fixed.time(4))
+        #expect(ws == before)
+    }
+
+    @Test func deleteTaskAndIgnoreUnknownID() throws {
+        var ws = try workspace(tasks: ["1", "2"])
+        ws.deleteTask(Fixed.id(20), now: Fixed.time(2))
+        #expect(ws.categories[0].tasks.map(\.content) == ["2"])
+        let before = ws
+        ws.deleteTask(Fixed.id(20), now: Fixed.time(3))
+        #expect(ws == before)
+    }
+
+    @Test func findCategoryAndTask() throws {
+        let ws = try workspace(tasks: ["1"])
+        #expect(ws.category(Fixed.id(10))?.name == "A")
+        #expect(ws.category(Fixed.id(99)) == nil)
+        #expect(ws.task(Fixed.id(20))?.category.id == Fixed.id(10))
+    }
+
     @Test func listSectionsHideCompleted() throws {
         var ws = try workspace(tasks: ["1", "2"])
         ws.setCompleted(Fixed.id(20), true, now: Fixed.time(2))
+        #expect(ws.listSections(hideCompleted: true).map(\.id) == [Fixed.id(10)])
         #expect(ws.listSections(hideCompleted: true)[0].tasks.map(\.content) == ["2"])
         #expect(ws.listSections(hideCompleted: false)[0].tasks.count == 2)
     }
@@ -186,6 +225,36 @@ private func workspace(tasks: [String]) throws -> Workspace {
     @Test(arguments: ["2026-02-29", "2026-13-01", "2026-1-01", "2026/10/30", "２０２６-10-30", "2026-10-30T00:00"])
     func invalidDates(_ s: String) {
         #expect(LocalDate(string: s) == nil)
+    }
+
+    // Date ⇔ LocalDate。暦はグレゴリオ暦に固定し、利用者の暦（和暦など）に左右されない（OPEN_ITEMS の不具合 A2）
+
+    /// 2026-10-29T15:30:00Z は、東京では 30 日、ロサンゼルスでは 29 日
+    @Test(arguments: [("Asia/Tokyo", "2026-10-30"), ("America/Los_Angeles", "2026-10-29"), ("UTC", "2026-10-29")])
+    func fromDate(_ zone: String, _ expected: String) throws {
+        let instant = Date(timeIntervalSince1970: 1_793_287_800)  // 2026-10-29T15:30:00Z
+        let tz = try #require(TimeZone(identifier: zone))
+        #expect(LocalDate(instant, in: tz)?.string == expected)
+    }
+
+    @Test func ordersByYearMonthDay() throws {
+        let dates = try ["2026-10-30", "2025-12-31", "2026-02-01"].map { try #require(LocalDate(string: $0)) }
+        #expect(dates.sorted().map(\.string) == ["2025-12-31", "2026-02-01", "2026-10-30"])
+    }
+
+    @Test func toDateIsStartOfDayInTheZone() throws {
+        let tz = try #require(TimeZone(identifier: "Asia/Tokyo"))
+        let date = try #require(LocalDate(string: "2026-10-30")).date(in: tz)
+        #expect(date == Date(timeIntervalSince1970: 1_793_286_000))  // 2026-10-29T15:00:00Z = 東京の 30 日 0 時
+    }
+
+    @Test(arguments: ["2026-10-30", "2024-02-29", "2026-03-08", "2026-11-01"])  // 3/8・11/1 はロサンゼルスの夏時間の切り替え日
+    func roundTrip(_ s: String) throws {
+        let day = try #require(LocalDate(string: s))
+        for zone in ["Asia/Tokyo", "America/Los_Angeles", "Pacific/Kiritimati", "Pacific/Pago_Pago"] {
+            let tz = try #require(TimeZone(identifier: zone))
+            #expect(LocalDate(day.date(in: tz), in: tz) == day, "\(zone)")
+        }
     }
 }
 

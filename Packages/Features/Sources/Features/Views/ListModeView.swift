@@ -50,8 +50,9 @@ struct ListModeView: View {
     private var categoryBinding: Binding<UUID?> {
         Binding(
             get: {
-                let last = model.viewState(store.id).lastUsedCategoryId
-                return store.workspace.category(last ?? UUID())?.id ?? store.workspace.categories.first?.id
+                // 最後に使ったカテゴリが消えていたら、先頭にする
+                let last = model.viewState(store.id).lastUsedCategoryId.flatMap { store.workspace.category($0) }
+                return (last ?? store.workspace.categories.first)?.id
             },
             set: { id in model.updateViewState(store.id) { $0.lastUsedCategoryId = id } }
         )

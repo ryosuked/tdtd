@@ -59,7 +59,7 @@ public struct RootView: View {
         }
         .confirmationDialog(
             "同じワークスペースがすでにあります",
-            isPresented: Binding(get: { model.pendingImport != nil }, set: { if !$0 { model.pendingImport = nil } }),
+            isPresented: $model.pendingImport.isPresent(),
             titleVisibility: .visible
         ) {
             Button("置き換える", role: .destructive) { model.resolvePendingImport(replace: true) }
@@ -68,10 +68,7 @@ public struct RootView: View {
         } message: {
             Text("「\(model.pendingImport?.name ?? "")」をどう読み込みますか。")
         }
-        .alert(
-            "エラー",
-            isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })
-        ) {
+        .alert("エラー", isPresented: $model.errorMessage.isPresent()) {
             Button("OK") { model.errorMessage = nil }
         } message: {
             Text(model.errorMessage ?? "")

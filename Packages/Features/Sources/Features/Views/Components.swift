@@ -3,8 +3,7 @@
 // - TaskRow: タスク 1 行（完了の丸、冒頭 3 行、期限、右クリックのメニュー）
 // - CategoryHeader: カテゴリの見出し（色、名前、未完了の数、メニュー）
 // - AddTaskField: タスクを足す 3 行の入力欄
-// - renameAlert: 名前を変えるアラート（ワークスペースとカテゴリで共用）
-// - CategoryColor の色と表示名
+// 部品から使う補助（名前の変更のアラート・色の対応表など）は ViewHelpers.swift にある。
 
 import SwiftUI
 import TodoCore
@@ -51,7 +50,7 @@ struct TaskRow: View {
             Menu("カテゴリへ移す") {
                 ForEach(store.workspace.categories) { category in
                     Button(category.name) {
-                        store.moveTask(task.id, to: category.id, at: category.tasks.count)
+                        store.moveTaskToEnd(task.id, of: category.id)
                     }
                 }
             }
@@ -139,78 +138,5 @@ struct AddTaskField: View {
         let value = trimmed
         guard !value.isEmpty, onAdd(value) else { return }
         content = ""
-    }
-}
-
-// Ceremony: 下の RenameAlert（ViewModifier）を、`.renameAlert(...)` の形で書けるようにするだけ
-extension View {
-    /// 名前を変える入力のアラート。空白だけの名前は受け付けない
-    func renameAlert<Item>(
-        item: Binding<Item?>, title: LocalizedStringKey, current: KeyPath<Item, String>,
-        onCommit: @escaping (Item, String) -> Void
-    ) -> some View {
-        modifier(RenameAlert(item: item, title: title, current: current, onCommit: onCommit))
-    }
-}
-
-/// ViewModifier は「ほかの画面に機能を足す部品」。ここではアラートを足す。
-/// `<Item>` はワークスペース（WorkspaceStore）とカテゴリ（TodoCategory）のどちらにも使うための型引数
-private struct RenameAlert<Item>: ViewModifier {
-    @Binding var item: Item?
-    let title: LocalizedStringKey
-    let current: KeyPath<Item, String>
-    let onCommit: (Item, String) -> Void
-    @State private var text = ""
-
-    func body(content: Content) -> some View {
-        content
-            .alert(title, isPresented: Binding(get: { item != nil }, set: { if !$0 { item = nil } })) {
-                TextField("名前", text: $text)
-                Button("キャンセル", role: .cancel) { item = nil }
-                Button("OK") {
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let item, !trimmed.isEmpty { onCommit(item, trimmed) }
-                    item = nil
-                }
-            }
-            // アラートを開くたびに、入力欄を今の名前で埋める（前回の入力が残らないように）
-            .onChange(of: item != nil) { _, shown in
-                if shown, let item { text = item[keyPath: current] }
-            }
-    }
-}
-
-// 以下は、色の名前（TodoCore の CategoryColor）から、画面の色と日本語の表示名への対応表
-
-extension CategoryColor {
-    /// パレット名から実際の色へ。ライト・ダークはシステムの色に任せる
-    var swatch: Color {
-        switch self {
-        case .gray: .gray
-        case .red: .red
-        case .orange: .orange
-        case .yellow: .yellow
-        case .green: .green
-        case .teal: .teal
-        case .blue: .blue
-        case .indigo: .indigo
-        case .purple: .purple
-        case .pink: .pink
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .gray: "グレー"
-        case .red: "赤"
-        case .orange: "オレンジ"
-        case .yellow: "黄"
-        case .green: "緑"
-        case .teal: "青緑"
-        case .blue: "青"
-        case .indigo: "藍"
-        case .purple: "紫"
-        case .pink: "ピンク"
-        }
     }
 }

@@ -11,6 +11,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "TodoCore"),
-        .testTarget(name: "TodoCoreTests", dependencies: ["TodoCore"]),
+        // 細部のテスト（値・表記まで見て、カバレッジを満たす）。scripts/test.sh detail で流す
+        .testTarget(name: "TodoCoreDetailTests", dependencies: ["TodoCore"], path: "Tests/Detail"),
     ]
 )

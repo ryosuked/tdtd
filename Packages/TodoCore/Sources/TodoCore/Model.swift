@@ -2,6 +2,7 @@
 //
 // ワークスペース → カテゴリ → タスクの 3 段の値型。JSON の形（data_model_spec §3）と 1 対 1 に対応する。
 // どれも値型（struct）で、変更は Operations.swift の操作だけを通す。
+// 末尾に、日時をミリ秒にそろえる補助（Date の extension）がある。
 //
 // レビューの観点:
 // - ここには検証が無い。誤りの状態を持ち込まないのは、操作（Operations.swift）と
@@ -87,4 +88,25 @@ public struct TodoItem: Equatable, Hashable, Sendable, Identifiable {
 /// CaseIterable は「全選択肢の一覧（allCases）を取れる」約束。色を選ぶメニューで使う
 public enum CategoryColor: String, CaseIterable, Sendable {
     case gray, red, orange, yellow, green, teal, blue, indigo, purple, pink
+}
+
+// MARK: - 日時
+// 保存の書式はミリ秒まで（data_model_spec §3.2）。操作が打つ日時も、ここでミリ秒に丸めてそろえる
+
+extension Date {
+    /// 1970 年からのミリ秒（整数）。保存の書式はこの値で書く
+    public var millisecondsSince1970: Int64 {
+        Int64((timeIntervalSince1970 * 1000).rounded())
+    }
+
+    /// ミリ秒（整数）から Date を作る
+    public init(millisecondsSince1970 ms: Int64) {
+        self.init(timeIntervalSince1970: Double(ms) / 1000)
+    }
+
+    /// ミリ秒に丸める。保存の書式（ミリ秒まで）と往復させても値が変わらないようにするため。
+    /// 切り捨てにしないのは、浮動小数点の誤差で 1 ms 下がることがあり、何度かけても同じ値になる保証が無いため
+    public var roundedToMilliseconds: Date {
+        Date(millisecondsSince1970: millisecondsSince1970)
+    }
 }

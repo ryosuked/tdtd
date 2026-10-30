@@ -13,6 +13,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "Persistence", dependencies: ["TodoCore"]),
-        .testTarget(name: "PersistenceTests", dependencies: ["Persistence"]),
+        // 細部のテスト（fixtures の契約・検証の場所と理由まで見る）。scripts/test.sh detail で流す
+        .testTarget(name: "PersistenceDetailTests", dependencies: ["Persistence"], path: "Tests/Detail"),
     ]
 )

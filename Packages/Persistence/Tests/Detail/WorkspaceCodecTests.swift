@@ -1,5 +1,6 @@
-// WorkspaceCodecTests.swift — Persistence のテスト
+// WorkspaceCodecTests.swift — Persistence の細部のテスト
 //
+// 検証の場所と理由まで見る。一連の流れは Features の Tests/Scenario で見る（CLAUDE.md §4）。
 // リポジトリのルートの fixtures/ を読む。fixtures/ は保存形式の契約（CLAUDE.md §4）。
 // - WorkspaceCodecTests: 正しいファイルが読めること、読んで書くと元と一致すること、版 1 からの移行、
 //   正規化、誤りのファイル（fixtures/invalid/）をそれぞれの場所と理由で拒否すること
@@ -13,7 +14,7 @@ import TodoCore
 
 /// リポジトリのルートの `fixtures/`（保存形式の契約）
 private let fixtures = URL(filePath: #filePath)
-    .deletingLastPathComponent()  // PersistenceTests
+    .deletingLastPathComponent()  // Detail
     .deletingLastPathComponent()  // Tests
     .deletingLastPathComponent()  // Persistence
     .deletingLastPathComponent()  // Packages
@@ -22,6 +23,11 @@ private let fixtures = URL(filePath: #filePath)
 
 private func fixture(_ path: String) throws -> Data {
     try Data(contentsOf: fixtures.appending(path: path))
+}
+
+/// テストごとの一時フォルダ（使い終わったら消す）
+private func temporaryRoot() -> URL {
+    FileManager.default.temporaryDirectory.appending(path: "TodoTests-\(UUID().uuidString)")
 }
 
 /// JSON の値として比べる（キーの並び・空白は問わない）
@@ -169,5 +175,65 @@ private func jsonValue(_ data: Data) throws -> NSObject {
         // 壊れたファイルは消さずに退避されている
         let damaged = try FileManager.default.contentsOfDirectory(atPath: root.appending(path: "damaged").path())
         #expect(damaged.count == 1)
+    }
+
+    /// 並びの記録（workspaceOrder）の順。記録に無いものは createdAt の順に末尾へ
+    @Test func loadAllOrdersByRecordThenCreatedAt() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = WorkspaceRepository(root: root)
+        let base = try WorkspaceCodec.decode(fixture("valid/basic.json"))
+        var n = 100
+        func copy(_ name: String, createdAfter seconds: TimeInterval) -> Workspace {
+            var ws = base.withNewIDs {
+                n += 1
+                return UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))!
+            }
+            ws.name = name
+            ws.createdAt = base.createdAt.addingTimeInterval(seconds)
+            return ws
+        }
+        let all = [copy("A", createdAfter: 3), copy("B", createdAfter: 1), copy("C", createdAfter: 2), copy("D", createdAfter: 0)]
+        for ws in all { try await repo.save(ws) }
+        var state = AppState()
+        state.workspaceOrder = [all[2].id, all[0].id]  // C, A
+        try await repo.saveAppState(state)
+
+        #expect(try await repo.loadAll().workspaces.map(\.name) == ["C", "A", "D", "B"])
+    }
+
+    @Test func deleteRemovesFileAndIgnoresMissing() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = WorkspaceRepository(root: root)
+        let ws = try WorkspaceCodec.decode(fixture("valid/basic.json"))
+        try await repo.save(ws)
+        try await repo.delete(ws.id)
+        try await repo.delete(ws.id)  // 無くても誤りにしない
+        #expect(try await repo.loadAll().workspaces.isEmpty)
+    }
+
+    /// 上限（20 MB）を超えるファイルは、中身を読む前に断る（data_model_spec §7）
+    @Test func readImportFileReadsAndRefusesTooLarge() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = WorkspaceRepository(root: root)
+        #expect(try await repo.readImportFile(at: fixtures.appending(path: "valid/basic.json"))
+            == WorkspaceCodec.decode(fixture("valid/basic.json")))
+
+        // 中身の無い大きなファイル（ディスクはほとんど使わない）
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let big = root.appending(path: "big.json")
+        #expect(FileManager.default.createFile(atPath: big.path(), contents: nil))
+        let handle = try FileHandle(forWritingTo: big)
+        try handle.truncate(atOffset: UInt64(WorkspaceFormat.maxImportBytes + 1))
+        try handle.close()
+        await #expect(throws: WorkspaceFileError(kind: .tooLarge, path: "")) {
+            try await repo.readImportFile(at: big)
+        }
+    }
+
+    @Test func defaultRootIsTodoFolder() throws {
+        #expect(try WorkspaceRepository.defaultRoot().lastPathComponent == "Todo")
     }
 }

@@ -1,10 +1,10 @@
-// Views.swift — 表示のための導出（TodoCore）
+// Display.swift — 表示のための導出（TodoCore）
 //
 // 画面に出す形を、保存しているデータから導き出す純粋関数。ここで作ったものは保存しない。
 // - DisplayMode: 短冊表示と 1 欄表示の区別（値は Persistence の AppState に保存）
 // - listSections: 1 欄表示の並び（カテゴリの順にタスクをつなげる）
 // - preview: 一覧に出す冒頭 3 行の切り出し
-// ファイル名は「SwiftUI の View」ではなく「見せ方」の意味。UI のコードは Features にある。
+// 画面（SwiftUI）のコードは Features にある。ここは画面に渡す値を作るだけ。
 //
 // レビューの観点:
 // - preview は全文を画面に渡さないための切り出し。長い中身でも計算量が冒頭だけで済むか
